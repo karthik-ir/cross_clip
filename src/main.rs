@@ -1,20 +1,20 @@
+use std::env;
 use std::error::Error;
 use std::hash::Hash;
 use std::io::Read;
 use std::task::{Context, Poll};
 use std::time::Duration;
 use futures::StreamExt;
-use libp2p::{gossipsub, identity, mdns, Multiaddr, noise, PeerId, SwarmBuilder, tcp, yamux};
+use libp2p::{gossipsub, identity, mdns, Multiaddr, noise, PeerId, Swarm, SwarmBuilder, tcp, yamux};
 use libp2p::core::Endpoint;
 use libp2p::core::transport::PortUse;
-use libp2p::gossipsub::{Behaviour, Config};
+use libp2p::gossipsub::{Behaviour, Config, Topic};
 use libp2p::identity::Keypair;
 use libp2p::ping;
 use libp2p::swarm::{ConnectionDenied, ConnectionId, FromSwarm, NetworkBehaviour, SwarmEvent, THandler, THandlerInEvent, THandlerOutEvent, ToSwarm};
 use tokio::{io, select};
 use tokio::io::AsyncBufReadExt;
 use log::{info, warn, debug, error};
-// use serde_json::{Result, Value};
 use serde::{Deserialize, Serialize};
 use serde_json::Deserializer;
 
@@ -31,15 +31,18 @@ struct MyMessage {
 }
 
 #[tokio::main]
+//dyn dynamic error
 async fn main() -> Result<(), Box<dyn Error>> {
     env_logger::init();
+    let args: Vec<String> = env::args().collect();
+
+    let topic_name = &args[1];
+
     // Create a key pair (unique identifier for a node)
     let local_keypair = createNewKeyPair();
 
     // This is the topic that the nodes will subscribe to
     // TODO: use the public key for the topic name
-    let topic = gossipsub::IdentTopic::new("test-net");
-
     let mdns = mdns::tokio::Behaviour::new(mdns::Config::default(), local_keypair.public().to_peer_id())?;
 
     let gossipsub = Behaviour::new(
@@ -59,29 +62,29 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .build();
 
     // subscribes to our topic
-    swarm.behaviour_mut().gossipsub.subscribe(&topic)?;
     swarm.listen_on("/ip4/0.0.0.0/udp/0/quic-v1".parse()?)?;
     println!("Enter messages via STDIN and they will be sent to connected peers using Gossipsub");
-
     let mut stdin = io::BufReader::new(io::stdin()).lines();
+    let topic = gossipsub::IdentTopic::new(topic_name);
+    swarm.behaviour_mut().gossipsub.subscribe(&topic)?;
+    let one_string = "1".to_string();
+
     loop {
         select! {
-            Ok(Some(line)) = stdin.next_line() =>{
-                println!("{}",line);
-                let message = MyMessage{
-                    message: line
-                };
-                let messageStr = serde_json::to_string(&message)?;
-                if let Err(e) = swarm.behaviour_mut().gossipsub.publish(topic.clone(), messageStr.as_bytes()) {
-                    error!("Publish error: {e:?}");
-                }
+            Ok(Some(line)) = stdin.next_line() => {
+                        println!("{}",line);
+                        let message = MyMessage{
+                            message: line
+                        };
+                        publish_message(topic_name, &message, &mut swarm.behaviour_mut().gossipsub);
             }
+
             //TODO: What is this MyBehaviourEvent?
             event = swarm.select_next_some() => match event {
                 SwarmEvent::Behaviour(MyBehaviourEvent::Mdns(mdns::Event::Discovered(list))) => {
                     for (peer_id, _multiaddr) in list {
                         debug!("mDNS discovered a new peer: {peer_id}");
-                        swarm.behaviour_mut().gossipsub.add_explicit_peer(&peer_id);
+                       swarm.behaviour_mut().gossipsub.add_explicit_peer(&peer_id);
                     }
                 },
                 SwarmEvent::Behaviour(MyBehaviourEvent::Mdns(mdns::Event::Expired(list))) => {
@@ -102,8 +105,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
                             "Got message: '{}' with id: {id} from peer: {peer_id}",
                             &message_struct.message,
                         );
-
-                        // serde_json::from_str(message.data)from_str(&message.data).unwrap().
                     }
 
                 _ => {}
@@ -111,7 +112,15 @@ async fn main() -> Result<(), Box<dyn Error>> {
         }
     }
 
-    // Ok(()).expect("TODO: panic message");
+}
+fn publish_message(topic_name: &String, message: &MyMessage, gossip_behaviour: &mut libp2p::gossipsub::Behaviour) -> bool {
+    let topic = gossipsub::IdentTopic::new(topic_name);
+    let messageStr = serde_json::to_string(&message).unwrap();
+    if let Err(e) = gossip_behaviour.publish(topic.clone(), messageStr.as_bytes()) {
+        error!("Publish error: {e:?}");
+        false;
+    }
+    true
 }
 
 fn get_gossipsub_config() -> Result<Config, Box<dyn Error>> {
