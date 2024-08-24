@@ -1,11 +1,10 @@
 use serde::{Deserialize, Serialize};
 use chrono::Utc;
 
-//
-// #[derive(Serialize, Deserialize, Debug)]
-// struct MyMessage {
-//     message: String,
-//     peer_id: String
+
+// pub struct ClipMessage {
+//     pub message: String,
+//     pub device_id: String,
 // }
 
 
@@ -19,7 +18,7 @@ impl InputMessage {
     pub fn new(message: String) -> Self {
         InputMessage {
             message,
-            timestamp: Utc::now().timestamp()
+            timestamp: Utc::now().timestamp(),
         }
     }
 }

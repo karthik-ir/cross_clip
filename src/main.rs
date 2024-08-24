@@ -1,5 +1,6 @@
 mod schema;
 
+use std::collections::HashMap;
 use std::env;
 use std::error::Error;
 use std::time::Duration;
@@ -12,7 +13,7 @@ use tokio::{io, select};
 use tokio::io::AsyncBufReadExt;
 use log::{info, debug, error};
 
-use crate::schema::message::{InputMessage};
+use crate::schema::message::InputMessage;
 
 
 #[derive(NetworkBehaviour)]
@@ -60,6 +61,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let topic = gossipsub::IdentTopic::new(topic_name);
     swarm.behaviour_mut().gossipsub.subscribe(&topic)?;
 
+    // clip message hashmap to store list of messages from all the devices
+    let mut device_messages: HashMap<String, Vec<String>> = HashMap::new();
+
+
     loop {
         select! {
             Ok(Some(line)) = stdin.next_line() => {
@@ -91,10 +96,16 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     message_id: id,
                     message })) => {
                         let message_struct:InputMessage = serde_json::from_slice(&message.data)?;
+                        device_messages.entry(peer_id.to_string()).or_insert(Vec::new()).push(message_struct.message.clone());
+
                         info!(
                             "Got message: '{}' and timestamp: '{}'\n id: {id} \n peer: {peer_id}",
                             &message_struct.message, &message_struct.timestamp
                         );
+                        info!(
+                            "Device Messages: {:?}", device_messages
+                        );
+
                     }
 
                 _ => {}
