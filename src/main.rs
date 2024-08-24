@@ -1,33 +1,25 @@
+mod schema;
+
 use std::env;
 use std::error::Error;
-use std::hash::Hash;
-use std::io::Read;
-use std::task::{Context, Poll};
 use std::time::Duration;
 use futures::StreamExt;
-use libp2p::{gossipsub, identity, mdns, Multiaddr, noise, PeerId, Swarm, SwarmBuilder, tcp, yamux};
-use libp2p::core::Endpoint;
-use libp2p::core::transport::PortUse;
-use libp2p::gossipsub::{Behaviour, Config, Topic};
+use libp2p::{gossipsub, mdns, PeerId, SwarmBuilder};
+use libp2p::gossipsub::{Behaviour, Config};
 use libp2p::identity::Keypair;
-use libp2p::ping;
-use libp2p::swarm::{ConnectionDenied, ConnectionId, FromSwarm, NetworkBehaviour, SwarmEvent, THandler, THandlerInEvent, THandlerOutEvent, ToSwarm};
+use libp2p::swarm::{NetworkBehaviour, SwarmEvent};
 use tokio::{io, select};
 use tokio::io::AsyncBufReadExt;
-use log::{info, warn, debug, error};
-use serde::{Deserialize, Serialize};
-use serde_json::Deserializer;
+use log::{info, debug, error};
+
+use crate::schema::message::{InputMessage};
+
 
 #[derive(NetworkBehaviour)]
 struct MyBehaviour {
     gossipsub: Behaviour,
     mdns: mdns::tokio::Behaviour,
     // pingBehaviour: ping::Behaviour,
-}
-
-#[derive(Serialize, Deserialize, Debug)]
-struct MyMessage {
-    message: String,
 }
 
 #[tokio::main]
@@ -39,7 +31,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let topic_name = &args[1];
 
     // Create a key pair (unique identifier for a node)
-    let local_keypair = createNewKeyPair();
+    let local_keypair = create_new_key_pair();
 
     // This is the topic that the nodes will subscribe to
     // TODO: use the public key for the topic name
@@ -50,7 +42,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         get_gossipsub_config()?,
     )?;
 
-    let pingBehaviour = ping::Behaviour::new(ping::Config::default());
+    // let ping_behaviour = ping::Behaviour::new(ping::Config::default());
 
     let mut swarm = SwarmBuilder::with_existing_identity(local_keypair.clone())
         .with_tokio()
@@ -67,15 +59,13 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let mut stdin = io::BufReader::new(io::stdin()).lines();
     let topic = gossipsub::IdentTopic::new(topic_name);
     swarm.behaviour_mut().gossipsub.subscribe(&topic)?;
-    let one_string = "1".to_string();
 
     loop {
         select! {
             Ok(Some(line)) = stdin.next_line() => {
                         println!("{}",line);
-                        let message = MyMessage{
-                            message: line
-                        };
+                        let message = InputMessage::new(line);
+                        println!("{:?}", message);
                         publish_message(topic_name, &message, &mut swarm.behaviour_mut().gossipsub);
             }
 
@@ -100,10 +90,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     propagation_source: peer_id,
                     message_id: id,
                     message })) => {
-                        let message_struct:MyMessage = serde_json::from_slice(&message.data)?;
+                        let message_struct:InputMessage = serde_json::from_slice(&message.data)?;
                         info!(
-                            "Got message: '{}' with id: {id} from peer: {peer_id}",
-                            &message_struct.message,
+                            "Got message: '{}' and timestamp: '{}'\n id: {id} \n peer: {peer_id}",
+                            &message_struct.message, &message_struct.timestamp
                         );
                     }
 
@@ -113,10 +103,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
     }
 
 }
-fn publish_message(topic_name: &String, message: &MyMessage, gossip_behaviour: &mut libp2p::gossipsub::Behaviour) -> bool {
+fn publish_message(topic_name: &String, message: &InputMessage, gossip_behaviour: &mut libp2p::gossipsub::Behaviour) -> bool {
     let topic = gossipsub::IdentTopic::new(topic_name);
-    let messageStr = serde_json::to_string(&message).unwrap();
-    if let Err(e) = gossip_behaviour.publish(topic.clone(), messageStr.as_bytes()) {
+    let message_str = serde_json::to_string(&message).unwrap();
+    if let Err(e) = gossip_behaviour.publish(topic.clone(), message_str.as_bytes()) {
         error!("Publish error: {e:?}");
         false;
     }
@@ -132,7 +122,7 @@ fn get_gossipsub_config() -> Result<Config, Box<dyn Error>> {
     Ok(gossipsub_config)
 }
 
-fn createNewKeyPair() -> Keypair {
+fn create_new_key_pair() -> Keypair {
     let local_keypair: Keypair = Keypair::generate_ed25519();
     let local_peer_id: PeerId = PeerId::from(local_keypair.public());
     println!("Local peer id: {:?}", local_peer_id);
